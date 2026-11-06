@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<style>body{margin:0}</style>
 <title>数字カード対戦</title>
+<style>body{margin:0}</style>
 </head>
 <body>
 <style>
@@ -103,6 +103,7 @@ details.rules summary{cursor:pointer;font-weight:700}
 .cardlist .r{font-weight:800;font-size:18px;width:28px;flex:none}
 
 .modal{position:fixed;inset:0;background:#0009;display:grid;place-items:center;z-index:50;padding:20px max(16px,env(safe-area-inset-right,0px)) 20px max(16px,env(safe-area-inset-left,0px))}
+.modal.cover{background:var(--bg)}
 .mbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:540px;width:100%;display:flex;flex-direction:column;gap:12px;max-height:100%;overflow:auto}
 .mbox h3{margin:0;font-size:18px}
 .mbox .mtext{margin:0}
@@ -125,12 +126,12 @@ details.rules summary{cursor:pointer;font-weight:700}
 </style>
 
 <div class="wrap">
-  <header><div class="hbtns"><button class="btn" id="rulesBtn" type="button">遊び方</button><button class="btn solid" id="newBtn" type="button">新しい対局</button></div></header>
+  <header><div class="hbtns"><button class="btn" id="rulesBtn" type="button">遊び方</button><button class="btn solid" id="cpuBtn" type="button">CPUと対戦</button><button class="btn solid" id="pvpBtn" type="button">2人で対戦</button></div></header>
 
   <div class="table">
     <div class="board">
       <section class="seat" id="seatCpu">
-        <div class="seat-head"><span class="seat-name">CPU</span><span id="cpuChips"></span></div>
+        <div class="seat-head"><span class="seat-name" id="nameOpp">CPU</span><span id="cpuChips"></span></div>
         <div class="row" id="cpuHand"></div>
         <div><div class="label">捨て札</div><div class="discards" id="cpuDiscard"></div></div>
       </section>
@@ -142,7 +143,7 @@ details.rules summary{cursor:pointer;font-weight:700}
       </div>
 
       <section class="seat" id="seatMe">
-        <div class="seat-head"><span class="seat-name">あなた</span><span id="meChips"></span></div>
+        <div class="seat-head"><span class="seat-name" id="nameMe">あなた</span><span id="meChips"></span></div>
         <div class="row hand" id="meHand"></div>
         <div class="actionbar"><span class="prompt" id="prompt"></span><button class="btn solid" id="playBtn" type="button" hidden>このカードを出す</button></div>
         <div class="detail" id="detail"></div>
@@ -205,21 +206,24 @@ function cardHTML(c,cls=''){return `<div class="card face ${cls}" data-n="${c.n}
 function backHTML(cls=''){return `<div class="card back ${cls}" aria-label="伏せ札"></div>`}
 function miniHTML(c){return `<div class="card face mini" data-n="${c.n}" title="${CARDS[c.n].text}"><span class="num">${c.n}</span></div>`}
 
-let G=null, firstPlayer=0, selIdx=null, playResolver=null;
+let G=null, firstPlayer=0, selIdx=null, playResolver=null, lastMode='cpu';
+const isHuman=i=>G.mode==='pvp'||i===0;
+const tagOf=i=>i===0?'me':'cpu';
 
-function newGame(){
+function newGame(mode=lastMode){
+  lastMode=mode;
   closeModal();
   const deck=[];let id=0;
   for(const n in CARDS)for(let i=0;i<CARDS[n].count;i++)deck.push({n:+n,id:id++});
   shuffle(deck);
-  G={deck,reborn:deck.pop(),meteor:0,over:false,winner:null,turn:firstPlayer,
-     players:[{name:'あなた',hand:[],discard:[],protected:false,hourglass:false},
-              {name:'CPU',hand:[],discard:[],protected:false,hourglass:false}],
+  const names=mode==='pvp'?['プレイヤー1','プレイヤー2']:['あなた','CPU'];
+  G={mode,view:0,hide:false,deck,reborn:deck.pop(),meteor:0,over:false,winner:null,turn:firstPlayer,
+     players:names.map(name=>({name,hand:[],discard:[],protected:false,hourglass:false})),
      knows:[null,null],log:[],fresh:null};
   G.players[0].hand.push(deck.pop());G.players[1].hand.push(deck.pop());
   firstPlayer=1-firstPlayer;
   selIdx=null;playResolver=null;
-  log(`対局開始。${G.turn===0?'あなた':'CPU'}が先手です。`,'sys');
+  log(`${mode==='pvp'?'2人対戦':'CPU戦'}開始。${G.players[G.turn].name}が先手です。`,'sys');
   render();loop(G);
 }
 
@@ -229,32 +233,42 @@ function log(msg,who='sys'){G.log.unshift({msg,who});renderLog()}
 async function loop(g){
   while(!g.over){
     const i=g.turn,P=g.players[i],oi=1-i;
+    if(g.mode==='pvp'){
+      g.view=i;g.hide=true;selIdx=null;render();
+      await ask({title:`${P.name}の番`,text:'相手に画面が見えないようにして、端末を渡してください。',ok:'手札を見る',cover:true});
+      if(g!==G)return;
+      g.hide=false;
+    }
     P.protected=false;
     if(g.deck.length===0){showdown();break}
     if(P.hourglass){
       P.hourglass=false;
       const pulled=g.deck.splice(-3);
       let k;
-      if(i===0){render();k=await ask({title:'「7」の効果',text:`山札から${pulled.length}枚。手札に残す1枚を選んでください。残りは山札に戻ります。`,cards:pulled})}
+      if(isHuman(i)){render();k=await ask({title:'「7」の効果',text:`山札から${pulled.length}枚。手札に残す1枚を選んでください。残りは山札に戻ります。`,cards:pulled})}
       else k=cpuKeep(pulled);
       if(g!==G)return;
       const kept=pulled.splice(k,1)[0];
       P.hand.push(kept);g.deck.push(...pulled);shuffle(g.deck);g.fresh=kept.id;
-      log(`${P.name}は${pulled.length+1}枚から1枚を選んだ`,i?'cpu':'me');
+      log(`${P.name}は${pulled.length+1}枚から1枚を選んだ`,tagOf(i));
     }else{const c=g.deck.pop();P.hand.push(c);g.fresh=c.id}
     render();
     let idx;
-    if(i===0)idx=await waitPlay();
+    if(isHuman(i))idx=await waitPlay();
     else{await pace(1000);idx=cpuChoose()}
     if(g!==G)return;
     const card=P.hand.splice(idx,1)[0];P.discard.push(card);
     if(g.knows[oi]!==null&&card.n===g.knows[oi])g.knows[oi]=null;
-    log(`${P.name}は${cname(card.n)}を出した`,i?'cpu':'me');
+    log(`${P.name}は${cname(card.n)}を出した`,tagOf(i));
     render();
     await applyEffect(i,card,g);
     if(g!==G)return;
     render();
     if(g.over)break;
+    if(g.mode==='pvp'){
+      await ask({title:'ターン終了',text:'「次へ」を押すと手札が隠れます。押してから相手に渡してください。',ok:'次へ'});
+      if(g!==G)return;
+    }
     g.turn=oi;
     await pace(i===0?400:250);
     render();
@@ -268,7 +282,7 @@ function waitPlay(){
 
 /* ---------- effects ---------- */
 async function applyEffect(a,card,g){
-  const A=g.players[a],oi=1-a,O=g.players[oi],n=card.n,tag=a?'cpu':'me';
+  const A=g.players[a],oi=1-a,O=g.players[oi],n=card.n,tag=tagOf(a);
   if(n===1){g.meteor++;if(g.meteor<2){log('1枚目の「1」。効果なし','sys');return}}
   if(n===4){A.protected=true;log(`${A.name}は次の番まで守られる`,tag);return}
   if(n===7){A.hourglass=true;log(`${A.name}の次の番は3枚から選べる`,tag);return}
@@ -277,33 +291,32 @@ async function applyEffect(a,card,g){
     case 1:log('2枚目の「1」！','big');await forcedDiscard(a,true,false,'「1」の効果');break;
     case 2:{
       let guess;
-      if(a===0)guess=await ask({title:'「2」の効果',text:'相手の手札の数字を宣言してください。',options:Object.keys(CARDS).map(k=>({label:k,value:+k}))});
+      if(isHuman(a))guess=await ask({title:'「2」の効果',text:'相手の手札の数字を宣言してください。',options:Object.keys(CARDS).map(k=>({label:k,value:+k}))});
       else{await pace(500);guess=cpuGuess()}
       if(g!==G)return;
       log(`${A.name}は${cname(guess)}と宣言`,tag);
-      if(O.hand[0]&&O.hand[0].n===guess){await pace(400);return end(a,`「2」で${O.name==='あなた'?'あなたの':'相手の'}手札（${cname(guess)}）を言い当てた`)}
+      if(O.hand[0]&&O.hand[0].n===guess){await pace(400);return end(a,`「2」で${O.name}の手札（${cname(guess)}）を言い当てた`)}
       log('外れ','sys');
-      if(a===1)g.cpuMiss=guess;
+      if(!isHuman(a))g.cpuMiss=guess;
       break}
     case 3:
       g.knows[a]=O.hand[0]?O.hand[0].n:null;
-      if(a===0){await ask({title:'「3」の効果',text:'相手の手札はこれです。',show:[{c:O.hand[0],cap:'相手の手札'}],ok:'閉じる'})}
-      else log('CPUはあなたの手札を見た','cpu');
+      log(`${A.name}は${O.name}の手札を見た`,tag);
+      if(isHuman(a)){await ask({title:'「3」の効果',text:'相手の手札はこれです。',show:[{c:O.hand[0],cap:O.name}],ok:'閉じる'})}
       break;
     case 5:await forcedDiscard(a,false,false,'「5」の効果');break;
     case 6:{
-      const mine=A.hand[0],theirs=O.hand[0];
-      if(!mine||!theirs)break;
-      const me=a===0?mine:theirs,cpu=a===0?theirs:mine;
-      g.knows[0]=cpu.n;g.knows[1]=me.n;
-      await ask({title:'「6」の効果',text:'互いの手札を見せ合います。',show:[{c:me,cap:'あなた'},{c:cpu,cap:'CPU'}],ok:'結果を見る'});
+      const p0=g.players[0].hand[0],p1=g.players[1].hand[0];
+      if(!p0||!p1)break;
+      g.knows[0]=p1.n;g.knows[1]=p0.n;
+      await ask({title:'「6」の効果',text:'互いの手札を見せ合います。',show:[{c:p0,cap:g.players[0].name},{c:p1,cap:g.players[1].name}],ok:'結果を見る'});
       if(g!==G)return;
-      if(me.n===cpu.n){log('同じ数字。何も起きない','sys');break}
-      return end(me.n>cpu.n?0:1,`「6」の比べ合いで${cname(Math.max(me.n,cpu.n))}が${cname(Math.min(me.n,cpu.n))}に勝った`)}
+      if(p0.n===p1.n){log('同じ数字。何も起きない','sys');break}
+      return end(p0.n>p1.n?0:1,`「6」の比べ合いで${cname(Math.max(p0.n,p1.n))}が${cname(Math.min(p0.n,p1.n))}に勝った`)}
     case 8:{
       [A.hand,O.hand]=[O.hand,A.hand];
       g.knows[a]=O.hand[0]?O.hand[0].n:null;g.knows[oi]=A.hand[0]?A.hand[0].n:null;
-      g.fresh=(a===0?A.hand[0]:O.hand[0])?.id;
+      g.fresh=g.players[g.view].hand[0]?.id;
       log('手札を交換した',tag);break}
     case 9:await forcedDiscard(a,true,true,'「9」の効果');break;
   }
@@ -314,7 +327,7 @@ async function forcedDiscard(a,open,noRevive,title){
   if(g.deck.length){O.hand.push(g.deck.pop())}
   render();
   let idx;
-  if(a===0){
+  if(isHuman(a)){
     idx=await ask({title,text:open?'相手の手札です。捨てさせるカードを選んでください。':'伏せたままの2枚から、捨てさせるカードを選んでください。',cards:O.hand,faceDown:!open});
   }else{
     await pace(900);
@@ -327,7 +340,7 @@ async function forcedDiscard(a,open,noRevive,title){
   if(g.knows[oi]!==null&&!A.hand.some(h=>h.n===g.knows[oi]))g.knows[oi]=null;
   render();
   if(c.n===10){await pace(500);sunFalls(oi,noRevive);return}
-  if(!O.hand.length)end(a,`${O.name==='あなた'?'あなたの':'相手の'}手札が尽きた`);
+  if(!O.hand.length)end(a,`${O.name}の手札が尽きた`);
 }
 
 function sunFalls(i,noRevive){
@@ -336,26 +349,29 @@ function sunFalls(i,noRevive){
   if(!g.reborn){end(1-i,'「10」が捨てられ、転生札はもう無い');return}
   while(P.hand.length)P.discard.push(P.hand.pop());
   P.hand.push(g.reborn);g.reborn=null;g.knows[1-i]=null;
-  if(i===0)g.fresh=P.hand[0].id;
+  if(i===g.view)g.fresh=P.hand[0].id;
   log(`「10」が捨てられ、${P.name}は転生札で復活した`,'big');
   render();
 }
 
 function showdown(){
-  const a=G.players[0].hand[0],b=G.players[1].hand[0];
-  log(`山札が尽きた。手札比べ：あなた ${cname(a.n)} / CPU ${cname(b.n)}`,'big');
+  const [p0,p1]=G.players,a=p0.hand[0],b=p1.hand[0];
+  log(`山札が尽きた。手札比べ：${p0.name} ${cname(a.n)} / ${p1.name} ${cname(b.n)}`,'big');
   if(a.n===b.n)end(-1,'山札が尽き、手札の数字が同じだった');
   else end(a.n>b.n?0:1,`山札が尽き、手札の大きさで決着（${cname(Math.max(a.n,b.n))}）`);
 }
 
 function end(winner,reason){
-  G.over=true;G.winner=winner;playResolver=null;
-  log(winner===-1?'引き分け':`${winner===0?'あなた':'CPU'}の勝ち：${reason}`,'big');
+  G.over=true;G.winner=winner;playResolver=null;G.hide=false;
+  const wname=winner===-1?null:G.players[winner].name;
+  log(winner===-1?'引き分け':`${wname}の勝ち：${reason}`,'big');
   render();
   const g=G;
   pace(500).then(()=>{if(g!==G)return;
-    const cls=winner===0?'win':winner===1?'lose':'draw';
-    const word=winner===0?'勝利':winner===1?'敗北':'引分';
+    let cls,word;
+    if(winner===-1){cls='draw';word='引き分け'}
+    else if(g.mode==='pvp'){cls='win';word=`${wname}の勝ち`}
+    else{cls=winner===0?'win':'lose';word=winner===0?'勝利':'敗北'}
     ask({title:'対局終了',html:`<div class="result ${cls}">${word}</div><p style="text-align:center;margin:0">${reason}</p>`,ok:'もう一局',alt:'盤面を見る'}).then(v=>{if(v===true)newGame()});
   });
 }
@@ -401,7 +417,7 @@ function cpuKeep(cards){const w=c=>c.n+(c.n===9?4:0)+(c.n===2&&G.knows[1]!==null
 /* ---------- modal ---------- */
 let modalResolve=null;
 function closeModal(){$('#modal').hidden=true;modalResolve=null}
-function ask({title,text='',html='',cards,faceDown,show,options,ok,alt}){
+function ask({title,text='',html='',cards,faceDown,show,options,ok,alt,cover}){
   return new Promise(res=>{
     modalResolve=res;
     $('#mTitle').textContent=title;
@@ -413,7 +429,7 @@ function ask({title,text='',html='',cards,faceDown,show,options,ok,alt}){
     if(options){box.classList.add('opts');options.forEach(o=>{const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=o.label;b.style.fontFamily='var(--f-num)';b.style.fontSize='20px';b.onclick=()=>done(o.value);box.append(b)})}
     if(alt){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=alt;b.onclick=()=>done(false);foot.append(b)}
     if(ok){const b=document.createElement('button');b.type='button';b.className='btn solid';b.textContent=ok;b.onclick=()=>done(true);foot.append(b)}
-    $('#modal').hidden=false;
+    $('#modal').classList.toggle('cover',!!cover);$('#modal').hidden=false;
     const f=$('#modal button');if(f)f.focus();
   });
 }
@@ -421,26 +437,31 @@ function ask({title,text='',html='',cards,faceDown,show,options,ok,alt}){
 /* ---------- render ---------- */
 function chips(p,i){
   let h='';
+  const v=G.view,other=1-v;
   if(!G.over&&G.turn===i)h+='<span class="chip turn">手番</span> ';
   if(p.protected)h+='<span class="chip ward">守り中</span> ';
   if(p.hourglass)h+='<span class="chip glass">次は3枚から</span> ';
-  if(i===1&&G.knows[0]!==null&&!G.over)h+=`<span class="chip know">判明：${cname(G.knows[0])}</span> `;
-  if(i===0&&G.knows[1]!==null&&!G.over)h+=`<span class="chip know">CPUに知られている</span> `;
+  if(!G.hide&&!G.over){
+    if(i===other&&G.knows[v]!==null)h+=`<span class="chip know">判明：${cname(G.knows[v])}</span> `;
+    if(i===v&&G.knows[other]!==null)h+=`<span class="chip know">相手に知られている</span> `;
+  }
   return h;
 }
 function render(){
   if(!G)return;
-  const [me,cpu]=G.players;
-  $('#seatMe').classList.toggle('active',!G.over&&G.turn===0);
-  $('#seatCpu').classList.toggle('active',!G.over&&G.turn===1);
-  $('#meChips').innerHTML=chips(me,0);$('#cpuChips').innerHTML=chips(cpu,1);
-  $('#cpuHand').innerHTML=cpu.hand.map(c=>G.over?cardHTML(c):backHTML()).join('')||'<span class="detail">手札なし</span>';
-  for(const [el,p] of [[$('#meDiscard'),me],[$('#cpuDiscard'),cpu]])
+  const v=G.view,o=1-v,me=G.players[v],opp=G.players[o];
+  $('#nameMe').textContent=me.name;$('#nameOpp').textContent=opp.name;
+  $('#seatMe').classList.toggle('active',!G.over&&G.turn===v);
+  $('#seatCpu').classList.toggle('active',!G.over&&G.turn===o);
+  $('#meChips').innerHTML=chips(me,v);$('#cpuChips').innerHTML=chips(opp,o);
+  $('#cpuHand').innerHTML=opp.hand.map(c=>G.over?cardHTML(c):backHTML()).join('')||'<span class="detail">手札なし</span>';
+  for(const [el,p] of [[$('#meDiscard'),me],[$('#cpuDiscard'),opp]])
     el.innerHTML=p.discard.map(miniHTML).join('')||'<span class="empty">まだありません</span>';
 
   const hand=$('#meHand');hand.innerHTML='';
-  const choosing=!!playResolver;
-  me.hand.forEach((c,i)=>{
+  const choosing=!!playResolver&&!G.hide;
+  if(G.hide){hand.innerHTML=me.hand.map(()=>backHTML()).join('')}
+  else me.hand.forEach((c,i)=>{
     const w=document.createElement('div');
     w.innerHTML=cardHTML(c,c.id===G.fresh?'newcard':'');
     const el=w.firstChild;
@@ -452,19 +473,20 @@ function render(){
     el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selIdx=i;render()}};
     hand.append(el);
   });
-  G.fresh=null;
+  if(!G.hide)G.fresh=null;
   if(!choosing&&selIdx!==null&&!me.hand[selIdx])selIdx=null;
-  const sel=selIdx!==null?me.hand[selIdx]:null;
+  const sel=selIdx!==null&&!G.hide?me.hand[selIdx]:null;
   const pb=$('#playBtn');
   pb.hidden=!choosing;
   pb.disabled=!sel||sel.n===10;
   let prompt='';
-  if(G.over)prompt=G.winner===0?'あなたの勝ち':G.winner===1?'CPUの勝ち':'引き分け';
+  if(G.over)prompt=G.winner===-1?'引き分け':`${G.players[G.winner].name}の勝ち`;
+  else if(G.hide)prompt='';
   else if(choosing)prompt=sel?(sel.n===10?'「10」は出せません':`${cname(sel.n)}を出しますか？`):'出すカードを選んでください';
-  else if(G.turn===1)prompt='CPUが考えています…';
+  else if(G.turn!==v)prompt=`${opp.name}が考えています…`;
   $('#prompt').textContent=prompt;
-  const show=sel||(me.hand.length===1?me.hand[0]:null);
-  $('#detail').innerHTML=show?`<b>${cname(show.n)}</b>：${CARDS[show.n].text}`:'カードを選ぶと効果が表示されます。';
+  const show=G.hide?null:(sel||(me.hand.length===1?me.hand[0]:null));
+  $('#detail').innerHTML=show?`<b>${cname(show.n)}</b>：${CARDS[show.n].text}`:(G.hide?'':'カードを選ぶと効果が表示されます。');
 
   $('#deckCard').innerHTML=G.deck.length?backHTML():'<div class="gone">空</div>';
   $('#deckCap').textContent=`山札 ${G.deck.length}`;
@@ -476,17 +498,19 @@ function render(){
 function renderLog(){$('#log').innerHTML=G.log.slice(0,60).map(l=>`<li class="${l.who}">${l.msg}</li>`).join('')}
 
 $('#playBtn').onclick=()=>{
-  if(!playResolver||selIdx===null)return;
-  const c=G.players[0].hand[selIdx];if(!c||c.n===10)return;
+  if(!playResolver||selIdx===null||G.hide)return;
+  const c=G.players[G.view].hand[selIdx];if(!c||c.n===10)return;
   const r=playResolver;playResolver=null;const i=selIdx;selIdx=null;r(i);
 };
-$('#newBtn').onclick=newGame;
+$('#cpuBtn').onclick=()=>newGame('cpu');
+$('#pvpBtn').onclick=()=>newGame('pvp');
 $('#rulesBtn').onclick=()=>{const d=$('#rules');d.open=true;d.scrollIntoView({behavior:reduceMotion?'auto':'smooth'})};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modal').hidden&&G&&G.over)closeModal()});
 $('#cardlist').innerHTML=Object.keys(CARDS).map(n=>`<div><span class="r">${n}</span><span>（${CARDS[n].count}枚）<br>${CARDS[n].text}</span></div>`).join('');
 
-newGame();
+newGame('cpu');
 </script>
+
 
 </body>
 </html>
